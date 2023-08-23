@@ -1,0 +1,12 @@
+[package]
+name = "q3-report"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eyre = "0.6.8"
+# unreleased version of nom
+# it now uses the `ManyModes` strategy in the parser implementation
+# which should be faster
+nom = { git = "https://github.com/rust-bakery/nom.git", rev = "8c68e22d9f2d0aadaa1770d980d59ea562dfb6a7" }
+variant_count = "1.1.0"
