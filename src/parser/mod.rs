@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use self::log_kind::LogKind;
 use crate::{
     death_cause::DeathCauseDb,
+    errors::Error,
     parser::combinators::{consume_rest_of_line, kill, Assassin},
     report::Report,
 };
@@ -19,45 +20,35 @@ pub struct Parser<'buf> {
 }
 
 impl<'file> Parser<'file> {
-    pub fn parse(buf: &'file [u8]) -> Vec<Report<'file>> {
-        // let mut reports = Vec::new();
+    pub fn parse(buf: &'file [u8]) -> Result<Vec<Report<'file>>, (Error, Vec<Report<'file>>)> {
         let mut parser = Parser::default();
 
         parser.parse_lines(buf)
-
-        // while let Ok(n) = content.read_line(&mut line) {
-        //     if n == 0 {
-        //         break;
-        //     }
-        //     match parser.parse_line::<nom::error::Error<_>>(&line) {
-        //         Ok(ControlFlow::Break(_)) => {
-        //             reports.push(parser.snapshot_report());
-        //         }
-        //         Ok(ControlFlow::Continue(_)) => {}
-        //         Err(er) => {
-        //             eprintln!("{er:?}");
-        //             std::process::exit(-1);
-        //         }
-        //     }
-        //     line.clear();
-        // }
-        // reports
     }
 
-    fn parse_lines(&mut self, mut buf: &'file [u8]) -> Vec<Report<'file>> {
+    fn parse_lines(
+        &mut self,
+        mut buf: &'file [u8],
+    ) -> Result<Vec<Report<'file>>, (Error, Vec<Report<'file>>)> {
         use nom::Parser;
         let mut reports = vec![];
 
         loop {
-            let (rest, (_timestamp, logkind)) = (
+            let Ok((rest, (_time, logkind))) = (
                 combinators::timestamp::<nom::error::Error<_>>,
                 combinators::log_kind,
             )
                 .parse(buf)
-                .unwrap();
+            else {
+                return Err((Error::Parsing(), reports));
+            };
+
             match logkind {
                 LogKind::Kill => {
-                    let (_, info) = kill::<nom::error::Error<_>>(rest).unwrap();
+                    let Ok((_, info)) = kill::<nom::error::Error<_>>(rest) else {
+                        return Err((Error::Parsing(), reports));
+                    };
+
                     self.total_kills += 1;
                     match info.assassin {
                         Assassin::World => {
@@ -71,7 +62,6 @@ impl<'file> Parser<'file> {
                 }
                 LogKind::ShutdownGame => {
                     reports.push(self.snapshot_report());
-                    // push the report
                 }
                 _ => {
                     // ignore
@@ -79,10 +69,13 @@ impl<'file> Parser<'file> {
             };
 
             if rest.is_empty() {
-                break reports;
+                break Ok(reports);
             }
 
-            let (newline, _) = consume_rest_of_line::<nom::error::Error<_>>(rest).unwrap();
+            let Ok((newline, _)) = consume_rest_of_line::<nom::error::Error<_>>(rest) else {
+                return Err((Error::Parsing(), reports));
+            };
+
             buf = newline;
         }
     }
