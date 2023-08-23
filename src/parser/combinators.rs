@@ -118,8 +118,9 @@ pub fn consume_rest_of_line<'file, E: ParseError<Bytes<'file>>>(
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use nom::error::VerboseError as E;
+
+    use super::*;
 
     #[test]
     fn test_parse_timestamp() {

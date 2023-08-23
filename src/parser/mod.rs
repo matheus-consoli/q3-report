@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 
+use self::log_kind::LogKind;
 use crate::{
     death_cause::DeathCauseDb,
     parser::combinators::{consume_rest_of_line, kill, Assassin},
     report::Report,
 };
-
-use self::log_kind::LogKind;
 
 mod combinators;
 mod log_kind;
