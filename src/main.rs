@@ -1,16 +1,17 @@
+mod death_cause;
 mod parser;
 mod report;
-mod death_cause;
 
-use std::{fs::File, io::BufReader};
+use std::fs::File;
 
+use memmapix::MmapOptions;
 use parser::Parser;
 
 fn main() -> eyre::Result<()> {
     let file = File::open("./q3.log")?;
-    let contents = BufReader::new(file);
+    let file_contents = unsafe { MmapOptions::new().map_copy_read_only(&file) }.unwrap();
 
-    let reports = Parser::parse_file(contents);
+    let reports = Parser::parse(&file_contents);
 
     for report in reports {
         println!("{report}");

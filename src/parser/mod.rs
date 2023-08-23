@@ -1,10 +1,8 @@
-use std::{collections::HashMap, io::BufRead, ops::ControlFlow};
-
-use nom::error::ParseError;
+use std::collections::HashMap;
 
 use crate::{
     death_cause::DeathCauseDb,
-    parser::combinators::{kill, Assassin},
+    parser::combinators::{consume_rest_of_line, kill, Assassin},
     report::Report,
 };
 
@@ -14,70 +12,83 @@ mod combinators;
 mod log_kind;
 
 #[derive(Debug, Default)]
-pub struct Parser {
+pub struct Parser<'buf> {
     game: u16,
     total_kills: u16,
-    // TODO: use &str
-    kills: HashMap<String, isize>,
+    kills: HashMap<&'buf [u8], isize>,
     means: DeathCauseDb,
 }
 
-impl Parser {
-    pub fn parse_file<A: BufRead>(mut content: A) -> Vec<Report> {
-        let mut reports = Vec::new();
+impl<'file> Parser<'file> {
+    pub fn parse(buf: &'file [u8]) -> Vec<Report<'file>> {
+        // let mut reports = Vec::new();
         let mut parser = Parser::default();
-        let mut line = String::new();
-        while let Ok(n) = content.read_line(&mut line) {
-            if n == 0 {
-                break;
-            }
-            match parser.parse_line::<nom::error::Error<_>>(&line) {
-                Ok(ControlFlow::Break(_)) => {
-                    reports.push(parser.snapshot_report());
-                }
-                Ok(ControlFlow::Continue(_)) => {}
-                Err(er) => {
-                    eprintln!("{er:?}");
-                    std::process::exit(-1);
-                }
-            }
-            line.clear();
-        }
-        reports
+
+        parser.parse_lines(buf)
+
+        // while let Ok(n) = content.read_line(&mut line) {
+        //     if n == 0 {
+        //         break;
+        //     }
+        //     match parser.parse_line::<nom::error::Error<_>>(&line) {
+        //         Ok(ControlFlow::Break(_)) => {
+        //             reports.push(parser.snapshot_report());
+        //         }
+        //         Ok(ControlFlow::Continue(_)) => {}
+        //         Err(er) => {
+        //             eprintln!("{er:?}");
+        //             std::process::exit(-1);
+        //         }
+        //     }
+        //     line.clear();
+        // }
+        // reports
     }
 
-    fn parse_line<'line, E: ParseError<&'line str> + std::fmt::Debug>(
-        &mut self,
-        line: &'line str,
-    ) -> eyre::Result<ControlFlow<()>> {
+    fn parse_lines(&mut self, mut buf: &'file [u8]) -> Vec<Report<'file>> {
         use nom::Parser;
-        let (rest, (_timestamp, logkind)) = (combinators::timestamp::<E>, combinators::log_kind)
-            .parse(line)
-            .map_err(|e| eyre::eyre!("failed to parse line:\n{line}\n{e}"))?;
+        let mut reports = vec![];
 
-        match logkind {
-            LogKind::Kill => {
-                let (_, info) = kill::<E>(rest).unwrap();
-                self.total_kills += 1;
-                match info.assassin {
-                    Assassin::World => {
-                        *self.kills.entry(info.victim.to_string()).or_insert(0) -= 1;
+        loop {
+            let (rest, (_timestamp, logkind)) = (
+                combinators::timestamp::<nom::error::Error<_>>,
+                combinators::log_kind,
+            )
+                .parse(buf)
+                .unwrap();
+            match logkind {
+                LogKind::Kill => {
+                    let (_, info) = kill::<nom::error::Error<_>>(rest).unwrap();
+                    self.total_kills += 1;
+                    match info.assassin {
+                        Assassin::World => {
+                            *self.kills.entry(info.victim).or_insert(0) -= 1;
+                        }
+                        Assassin::Person(person) => {
+                            *self.kills.entry(person).or_insert(0) += 1;
+                        }
                     }
-                    Assassin::Person(person) => {
-                        *self.kills.entry(person.to_string()).or_insert(0) += 1;
-                    }
+                    self.means.inc_death(info.mean);
                 }
-                self.means.inc_death(info.mean);
+                LogKind::ShutdownGame => {
+                    reports.push(self.snapshot_report());
+                    // push the report
+                }
+                _ => {
+                    // ignore
+                }
+            };
+
+            if rest.is_empty() {
+                break reports;
             }
-            LogKind::ShutdownGame => return Ok(ControlFlow::Break(())),
-            _ => {
-                // ignore
-            }
-        };
-        Ok(ControlFlow::Continue(()))
+
+            let (newline, _) = consume_rest_of_line::<nom::error::Error<_>>(rest).unwrap();
+            buf = newline;
+        }
     }
 
-    fn snapshot_report(&mut self) -> Report {
+    fn snapshot_report(&mut self) -> Report<'file> {
         let report = Report {
             game_number: self.game,
             total_kills: self.total_kills,

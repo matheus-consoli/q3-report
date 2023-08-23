@@ -17,6 +17,8 @@ use nom::{
 use super::log_kind::LogKind;
 use crate::death_cause::DeathCause;
 
+type Bytes<'file> = &'file [u8];
+
 /// Parse the timestamp from a log line.
 ///
 /// Timestamp have the form `MM:ss`.
@@ -24,9 +26,9 @@ use crate::death_cause::DeathCause;
 /// ```text
 ///  15:00  <rest>
 /// ```
-pub fn timestamp<'line, E: ParseError<&'line str>>(
-    input: &'line str,
-) -> IResult<&'_ str, (&'_ str, &'_ str), E> {
+pub fn timestamp<'file, E: ParseError<Bytes<'file>>>(
+    input: Bytes<'file>,
+) -> IResult<Bytes<'file>, (Bytes<'file>, Bytes<'file>), E> {
     separated_pair(preceded(multispace0(), digit1()), tag(":"), digit1()).parse(input)
 }
 
@@ -37,9 +39,9 @@ pub fn timestamp<'line, E: ParseError<&'line str>>(
 /// ```text
 /// <timestamp>: <log kind>
 /// ```
-pub fn log_kind<'line, E: ParseError<&'line str>>(
-    input: &'line str,
-) -> IResult<&'_ str, LogKind, E> {
+pub fn log_kind<'file, E: ParseError<Bytes<'file>>>(
+    input: Bytes<'file>,
+) -> IResult<Bytes<'file>, LogKind, E> {
     preceded(
         multispace0(),
         alt((
@@ -67,20 +69,23 @@ pub fn log_kind<'line, E: ParseError<&'line str>>(
 /// Parse the content of a "Kill" log line
 ///
 /// " 3 4 6: player1 killed Player 2 by MOD_ROCKET"
-pub fn kill<'line, E: ParseError<&'line str>>(input: &'line str) -> IResult<&'_ str, KillInfo, E> {
+pub fn kill<'file, E: ParseError<Bytes<'file>>>(
+    input: Bytes<'file>,
+) -> IResult<Bytes<'file>, KillInfo, E> {
     // "[ 3 4 6: ]player1 killed Player 2 by MOD_ROCKET"
     let (rest, _) = (take_until(":"), tag(":"), multispace1).parse(input)?;
 
     // "[player1] killed Player 2 by MOD_ROCKET"
     let (rest, assassin) = take_until(" killed")(rest).map(|(rest, assassin)| match assassin {
-        "<world>" => (rest, Assassin::World),
+        b"<world>" => (rest, Assassin::World),
         otherwise => (rest, Assassin::Person(otherwise)),
     })?;
 
     // "killed [Player 2] by MOD_ROCKET"
     let (rest, (_, victim)) = (tag(" killed "), take_until(" by")).parse(rest)?;
     // "by [MOD_ROCKET]"
-    let (mean, _) = tag(" by ")(rest)?;
+    let (rest, (_, mean)) = (tag(" by "), take_while(|c| !is_newline(c))).parse(rest)?;
+    let mean = std::str::from_utf8(mean).unwrap();
     let mean = DeathCause::from_str(mean).unwrap();
 
     let kill = KillInfo {
@@ -88,25 +93,25 @@ pub fn kill<'line, E: ParseError<&'line str>>(input: &'line str) -> IResult<&'_ 
         victim,
         mean,
     };
-    Ok(("", kill))
+    Ok((rest, kill))
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct KillInfo<'line> {
-    pub assassin: Assassin<'line>,
-    pub victim: &'line str,
+pub struct KillInfo<'file> {
+    pub assassin: Assassin<'file>,
+    pub victim: Bytes<'file>,
     pub mean: DeathCause,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Assassin<'line> {
+pub enum Assassin<'file> {
     World,
-    Person(&'line str),
+    Person(Bytes<'file>),
 }
 
-fn consume_rest_of_line<'line, E: ParseError<&'line [u8]>>(
-    input: &'line [u8],
-) -> IResult<&'_ [u8], &'_ [u8], E> {
+pub fn consume_rest_of_line<'file, E: ParseError<Bytes<'file>>>(
+    input: Bytes<'file>,
+) -> IResult<Bytes<'file>, Bytes<'file>, E> {
     let (rest, (before, _)) = ((take_while(|c| !is_newline(c))), tag("\n")).parse(input)?;
     Ok((rest, before))
 }
@@ -118,46 +123,58 @@ mod test {
 
     #[test]
     fn test_parse_timestamp() {
-        let parsed = timestamp::<E<_>>("  20:34 ClientConnect: 2");
+        let parsed = timestamp::<E<_>>(b"  20:34 ClientConnect: 2");
 
-        assert_eq!(parsed, Ok((" ClientConnect: 2", ("20", "34"))));
+        assert_eq!(
+            parsed,
+            Ok((
+                " ClientConnect: 2".as_bytes(),
+                ("20".as_bytes(), "34".as_bytes())
+            ))
+        );
     }
 
     #[test]
     fn test_parse_log_kind() {
-        let parsed = log_kind::<E<_>>(" Exit: Timelimit hit.");
-        assert_eq!(parsed, Ok((" Timelimit hit.", LogKind::Exit)));
+        let parsed = log_kind::<E<_>>(b" Exit: Timelimit hit.");
+        assert_eq!(parsed, Ok((" Timelimit hit.".as_bytes(), LogKind::Exit)));
     }
 
     #[test]
     fn test_parse_dashline() {
         let parsed =
-            log_kind::<E<_>>(" ------------------------------------------------------------");
-        assert_eq!(parsed, Ok(("", LogKind::Dashline)));
+            log_kind::<E<_>>(b" ------------------------------------------------------------");
+        assert_eq!(parsed, Ok(("".as_bytes(), LogKind::Dashline)));
     }
 
     #[test]
     fn test_parse_full_dashline() {
         let parsed = (timestamp::<E<_>>, log_kind)
-            .parse(" 0:00 ------------------------------------------------------------\n");
-        assert_eq!(parsed, Ok(("\n", (("0", "00"), LogKind::Dashline))));
+            .parse(b" 0:00 ------------------------------------------------------------\n");
+        assert_eq!(
+            parsed,
+            Ok((
+                "\n".as_bytes(),
+                (("0".as_bytes(), "00".as_bytes()), LogKind::Dashline)
+            ))
+        );
     }
 
     #[test]
     fn test_parse_kill() {
-        let parsed = kill::<E<_>>(" 3 4 6: player1 killed Player 2 by MOD_ROCKET");
+        let parsed = kill::<E<_>>(b" 3 4 6: player1 killed Player 2 by MOD_ROCKET\nnextline");
         let exp_kill = KillInfo {
-            assassin: Assassin::Person("player1"),
-            victim: "Player 2",
+            assassin: Assassin::Person(b"player1"),
+            victim: b"Player 2",
             mean: DeathCause::Rocket,
         };
 
-        assert_eq!(parsed, Ok(("", exp_kill)));
+        assert_eq!(parsed, Ok(("\nnextline".as_bytes(), exp_kill)));
     }
 
     #[test]
     fn test_eat_line() {
-        let parsed = consume_rest_of_line::<E<_>>(b"aaabbb\nnewline");
+        let parsed = consume_rest_of_line::<E<_>>(b"");
 
         assert_eq!(parsed, Ok(("newline".as_bytes(), "aaabbb".as_bytes())))
     }

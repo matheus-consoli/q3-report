@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 eyre = "0.6.8"
+memmapix = "0.7.3"
 # unreleased version of nom
 # it now uses the `ManyModes` strategy in the parser implementation
 # which should be faster

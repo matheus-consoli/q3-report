@@ -6,14 +6,14 @@ use std::{
 use crate::death_cause::DeathCauseDb;
 
 #[derive(Debug)]
-pub struct Report {
+pub struct Report<'file> {
     pub game_number: u16,
     pub total_kills: u16,
-    pub kills: HashMap<String, isize>,
+    pub kills: HashMap<&'file [u8], isize>,
     pub means: DeathCauseDb,
 }
 
-impl fmt::Display for Report {
+impl fmt::Display for Report<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let space = ' ';
         let mut buf = String::new();
@@ -22,11 +22,22 @@ impl fmt::Display for Report {
 
         writeln!(&mut buf, "{space:<2}\"total_kills\": {},", self.total_kills)?;
 
-        let players = self.kills.keys();
-        writeln!(&mut buf, "{space:<2}\"players\": {players:?},")?;
+        let mut players = self.kills.keys().map(|p| std::str::from_utf8(p).unwrap());
+        write!(&mut buf, "{space:<2}\"players\": [")?;
+        if let Some(player) = players.next() {
+            write!(&mut buf, "\"{player}\"")?;
+            for player in players {
+                write!(&mut buf, ", \"{player}\"")?;
+            }
+        }
+        writeln!(&mut buf, "],")?;
+
         write!(&mut buf, "{space:<2}\"kills\": {{")?;
 
-        let mut kills = self.kills.iter();
+        let mut kills = self
+            .kills
+            .iter()
+            .map(|(player, k)| (std::str::from_utf8(player).unwrap(), k));
         if let Some((player, kill_count)) = kills.next() {
             // handle the first player differently to format `,` appropriately
             write!(&mut buf, "\n{space:<4}\"{player}\": {kill_count}")?;

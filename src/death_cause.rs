@@ -120,7 +120,7 @@ impl FromStr for DeathCause {
             "MOD_KAMIKAZE" => DeathCause::Kamikaze,
             "MOD_JUICED" => DeathCause::Juiced,
             "MOD_GRAPPLE" => DeathCause::Grapple,
-            _ => todo!(),
+            e => todo!("{}", e),
         };
         Ok(cause)
     }
